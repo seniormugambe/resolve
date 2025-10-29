@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { ComplaintCard, Complaint } from "@/components/ComplaintCard";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Search } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Search, TrendingUp, AlertTriangle, Clock, CheckCircle2, Bot } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -11,6 +13,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
+import { escalationService } from "@/services/escalationService";
+import { analyticsService, PredictiveInsight } from "@/services/analyticsService";
 
 interface DashboardProps {
   complaints: Complaint[];
@@ -21,6 +25,9 @@ export const Dashboard = ({ complaints }: DashboardProps) => {
   const [statusFilter, setStatusFilter] = useState("all");
   const [priorityFilter, setPriorityFilter] = useState("all");
   const [selectedComplaint, setSelectedComplaint] = useState<Complaint | null>(null);
+  const [insights, setInsights] = useState<PredictiveInsight[]>([]);
+  const [escalationAlerts, setEscalationAlerts] = useState<any[]>([]);
+  const [showInsights, setShowInsights] = useState(false);
 
   const filteredComplaints = complaints.filter((complaint) => {
     const matchesSearch = complaint.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -30,18 +37,74 @@ export const Dashboard = ({ complaints }: DashboardProps) => {
     return matchesSearch && matchesStatus && matchesPriority;
   });
 
+  // Check for escalation opportunities
+  useEffect(() => {
+    const checkEscalations = async () => {
+      const alerts = [];
+      for (const complaint of complaints) {
+        const escalationCheck = await escalationService.checkEscalation(complaint);
+        if (escalationCheck.shouldEscalate) {
+          alerts.push({
+            complaint,
+            ...escalationCheck
+          });
+        }
+      }
+      setEscalationAlerts(alerts);
+    };
+
+    const loadInsights = async () => {
+      const predictiveInsights = await analyticsService.getPredictiveInsights(complaints);
+      setInsights(predictiveInsights);
+    };
+
+    checkEscalations();
+    loadInsights();
+  }, [complaints]);
+
   const stats = {
     total: complaints.length,
     new: complaints.filter(c => c.status === "new").length,
     inProgress: complaints.filter(c => c.status === "in-progress").length,
     escalated: complaints.filter(c => c.status === "escalated").length,
     resolved: complaints.filter(c => c.status === "resolved").length,
+    needsEscalation: escalationAlerts.length,
   };
 
   return (
     <div className="space-y-6">
+      {/* Escalation Alerts */}
+      {escalationAlerts.length > 0 && (
+        <Card className="border-warning bg-warning/5">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-warning">
+              <AlertTriangle className="h-5 w-5" />
+              Escalation Alerts ({escalationAlerts.length})
+            </CardTitle>
+            <CardDescription>
+              Complaints requiring immediate escalation based on AI analysis
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {escalationAlerts.slice(0, 3).map((alert, index) => (
+                <div key={index} className="flex items-center justify-between p-2 bg-background rounded border">
+                  <div>
+                    <p className="font-medium text-sm">{alert.complaint.title}</p>
+                    <p className="text-xs text-muted-foreground">{alert.reason}</p>
+                  </div>
+                  <Button size="sm" variant="outline">
+                    Escalate to Level {alert.newLevel}
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Statistics */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
         <div className="bg-card border rounded-lg p-4">
           <div className="text-2xl font-bold text-foreground">{stats.total}</div>
           <div className="text-sm text-muted-foreground">Total</div>
@@ -62,7 +125,71 @@ export const Dashboard = ({ complaints }: DashboardProps) => {
           <div className="text-2xl font-bold text-success">{stats.resolved}</div>
           <div className="text-sm text-muted-foreground">Resolved</div>
         </div>
+        <div className="bg-card border rounded-lg p-4">
+          <div className="text-2xl font-bold text-destructive">{stats.needsEscalation}</div>
+          <div className="text-sm text-muted-foreground">Needs Escalation</div>
+        </div>
       </div>
+
+      {/* AI Insights */}
+      {insights.length > 0 && (
+        <Card className="border-primary/20 bg-primary/5">
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="flex items-center gap-2">
+                <Bot className="h-5 w-5 text-primary" />
+                AI Insights & Recommendations
+              </CardTitle>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowInsights(!showInsights)}
+              >
+                {showInsights ? 'Hide' : 'Show'} Details
+              </Button>
+            </div>
+            <CardDescription>
+              Predictive analytics and actionable recommendations
+            </CardDescription>
+          </CardHeader>
+          {showInsights && (
+            <CardContent>
+              <div className="space-y-4">
+                {insights.map((insight, index) => (
+                  <div key={index} className="border rounded-lg p-4 bg-background">
+                    <div className="flex items-start justify-between mb-2">
+                      <h4 className="font-medium">{insight.title}</h4>
+                      <div className="flex gap-2">
+                        <Badge variant={
+                          insight.impact === 'high' ? 'destructive' :
+                          insight.impact === 'medium' ? 'warning' : 'outline'
+                        }>
+                          {insight.impact} impact
+                        </Badge>
+                        <Badge variant="outline">
+                          {(insight.confidence * 100).toFixed(0)}% confidence
+                        </Badge>
+                      </div>
+                    </div>
+                    <p className="text-sm text-muted-foreground mb-3">{insight.description}</p>
+                    <div>
+                      <p className="text-sm font-medium mb-1">Suggested Actions:</p>
+                      <ul className="text-sm text-muted-foreground space-y-1">
+                        {insight.suggestedActions.map((action, actionIndex) => (
+                          <li key={actionIndex} className="flex items-center gap-2">
+                            <div className="w-1 h-1 bg-primary rounded-full" />
+                            {action}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          )}
+        </Card>
+      )}
 
       {/* Filters */}
       <div className="flex flex-col md:flex-row gap-4">
